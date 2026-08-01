@@ -254,7 +254,7 @@
     
     <script>
         // Versi frontend. Ubah nilai ini setiap ada update besar agar PWA tidak membuka shell lama.
-        const APP_VERSION = "20260728-si-juragan-mts-sage-v2";
+        const APP_VERSION = "20260801-si-juragan-mts-save-journal-fix-v1";
         const manifestData = {
             "id": "./?app_v=" + APP_VERSION,
             "name": "Si Juragan MTs",
@@ -1391,59 +1391,121 @@
         }
 
         function submitJournal() {
-            if (isSignatureEmpty) return showToast("Tanda tangan wajib diisi!");
-            const jams = Array.from(document.querySelectorAll('.jam-checkbox:checked')).map(cb => cb.value);
-            if (!jams.length) return showToast("Pilih jam mengajar!");
-            
-            let guruPengisi = currentUser;
-            if (currentUserRole === 'TU' || currentUserRole === 'Piket' || currentUserRole === 'Admin') {
-                const tuGuruVal = document.getElementById('input-tu-guru').value;
-                if (!tuGuruVal) return showToast("Pilih Guru yang digantikan!");
-                guruPengisi = currentUser + " (Ganti " + tuGuruVal + ")";
-            }
-            
-            let absenOtomatis = document.getElementById('hidden-absen-otomatis').value.trim();
-            let manualItems = [];
-            document.querySelectorAll('.student-attendance-row').forEach(row => {
-                const siswa = row.querySelector('.student-name-label').innerText.trim();
-                const ket = row.querySelector('.student-status-select').value;
-                if (siswa) {
-                    absensiSiswa.push({nama: siswa, status: ket});
+            const form = document.getElementById('journalForm');
+            const submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+
+            try {
+                // Tetap jalankan validasi required bawaan browser jika fungsi dipanggil manual.
+                if (form && !form.reportValidity()) return;
+                if (isSignatureEmpty || !sigCanvas) return showToast("Tanda tangan wajib diisi!");
+
+                const jams = Array.from(document.querySelectorAll('.jam-checkbox:checked')).map(cb => cb.value);
+                if (!jams.length) return showToast("Pilih jam mengajar!");
+
+                const kelas = document.getElementById('input-kelas').value;
+                const mapel = document.getElementById('input-mapel').value;
+                const materi = document.getElementById('input-materi').value.trim();
+                const tindakLanjut = document.getElementById('input-tindak-lanjut').value.trim();
+
+                if (!kelas) return showToast("Pilih kelas!");
+                if (!mapel) return showToast("Pilih mata pelajaran!");
+                if (!materi) return showToast("Materi pokok wajib diisi!");
+                if (!tindakLanjut) return showToast("Tindak lanjut wajib diisi!");
+
+                let guruPengisi = currentUser;
+                if (currentUserRole === 'TU' || currentUserRole === 'Piket' || currentUserRole === 'Admin') {
+                    const tuGuruVal = document.getElementById('input-tu-guru').value;
+                    if (!tuGuruVal) return showToast("Pilih Guru yang digantikan!");
+                    guruPengisi = currentUser + " (Ganti " + tuGuruVal + ")";
                 }
-                if (siswa && ket !== 'Hadir') { manualItems.push(`${siswa} (${ket})`); }
-            });
-            
-            let absenManual = manualItems.join(', ');
-            let finalAbsenArr = [];
-            let absensiSiswa = [];
-            if (absenOtomatis) finalAbsenArr.push(absenOtomatis);
-            if (absenManual) finalAbsenArr.push(absenManual);
-            let finalAbsenStr = finalAbsenArr.join(', ');
-            
-            const data = {
-                hari: document.getElementById('input-hari').value,
-                tanggal: document.getElementById('input-tanggal').value,
-                jam: "Jam " + jams.join(', '),
-                namaGuru: guruPengisi,
-                kelas: document.getElementById('input-kelas').value,
-                mapel: document.getElementById('input-mapel').value,
-                materi: document.getElementById('input-materi').value,
-                siswaAbsenStr: finalAbsenStr,
-                absensiSiswa: absensiSiswa,
-                tindakLanjut: document.getElementById('input-tindak-lanjut').value,
-                foto: document.getElementById('hidden-foto-base64').value,
-                ttd: sigCanvas.toDataURL('image/png')
-            };
-            
-            showLoader("Menyimpan...");
-            callAPI('saveJournal', data).then(res => {
+
+                const absenOtomatis = document.getElementById('hidden-absen-otomatis').value.trim();
+                const manualItems = [];
+                const absensiSiswa = []; // Harus dibuat sebelum dipakai di dalam forEach.
+
+                document.querySelectorAll('.student-attendance-row').forEach(row => {
+                    const namaEl = row.querySelector('.student-name-label');
+                    const statusEl = row.querySelector('.student-status-select');
+                    const siswa = namaEl ? namaEl.innerText.trim() : '';
+                    const ket = statusEl ? statusEl.value : 'Hadir';
+
+                    if (siswa) absensiSiswa.push({ nama: siswa, status: ket });
+                    if (siswa && ket !== 'Hadir') manualItems.push(`${siswa} (${ket})`);
+                });
+
+                const finalAbsenArr = [];
+                if (absenOtomatis) finalAbsenArr.push(absenOtomatis);
+                if (manualItems.length) finalAbsenArr.push(manualItems.join(', '));
+
+                const data = {
+                    hari: document.getElementById('input-hari').value,
+                    tanggal: document.getElementById('input-tanggal').value,
+                    jam: "Jam " + jams.join(', '),
+                    namaGuru: guruPengisi,
+                    kelas: kelas,
+                    mapel: mapel,
+                    materi: materi,
+                    siswaAbsenStr: finalAbsenArr.join(', '),
+                    absensiSiswa: absensiSiswa,
+                    tindakLanjut: tindakLanjut,
+                    foto: document.getElementById('hidden-foto-base64').value,
+                    ttd: sigCanvas.toDataURL('image/png')
+                };
+
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.dataset.originalHtml = submitBtn.innerHTML;
+                    submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
+                    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Menyimpan...';
+                }
+
+                showLoader("Menyimpan jurnal...");
+                callAPI('saveJournal', data)
+                    .then(res => {
+                        if (!res || !res.success) {
+                            throw new Error((res && res.message) || "Server tidak mengembalikan respons yang valid.");
+                        }
+
+                        showToast(res.message || "Jurnal berhasil disimpan!");
+                        form.reset();
+                        clearSignature();
+                        document.getElementById('hidden-foto-base64').value = '';
+                        document.getElementById('foto-preview').src = '';
+                        document.getElementById('foto-preview').classList.add('hidden');
+                        document.getElementById('otomatis-absen-container').classList.add('hidden');
+                        document.getElementById('manual-absen-wrapper').innerHTML = '';
+                        currentStudents = [];
+
+                        jams.forEach(jam => {
+                            if (!filledJamsThisSession.includes(String(jam))) filledJamsThisSession.push(String(jam));
+                        });
+
+                        updateJamDisplay();
+                        switchView('view-dashboard');
+                        setTimeout(() => { loadDashboardData(); }, 300);
+                    })
+                    .catch(error => {
+                        console.error('Gagal menyimpan jurnal:', error);
+                        showToast("Gagal menyimpan: " + (error && error.message ? error.message : "Koneksi terputus."));
+                    })
+                    .finally(() => {
+                        hideLoader();
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+                            submitBtn.innerHTML = submitBtn.dataset.originalHtml || '<i class="fas fa-paper-plane mr-2"></i> Simpan Jurnal';
+                            delete submitBtn.dataset.originalHtml;
+                        }
+                    });
+            } catch (error) {
                 hideLoader();
-                if (res && res.success) {
-                    showToast("Jurnal disimpan!"); document.getElementById('journalForm').reset();
-                    filledJamsThisSession.push(...jams); document.getElementById('otomatis-absen-container').classList.add('hidden');
-                    updateJamDisplay(); switchView('view-dashboard'); setTimeout(() => { loadDashboardData(); }, 300);
-                } else showToast("Gagal menyimpan.");
-            }).catch(() => { hideLoader(); showToast("Koneksi terputus."); });
+                console.error('Error submitJournal:', error);
+                showToast("Form gagal diproses: " + (error && error.message ? error.message : "Terjadi kesalahan."));
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+                }
+            }
         }
 
         function openInputIzin() {
