@@ -254,7 +254,7 @@
     
     <script>
         // Versi frontend. Ubah nilai ini setiap ada update besar agar PWA tidak membuka shell lama.
-        const APP_VERSION = "20260801-dashboard-belum-isi-v4";
+        const APP_VERSION = "20260801-absensi-pusat-v5";
         const manifestData = {
             "id": "./?app_v=" + APP_VERSION,
             "name": "Si Juragan MTs",
@@ -1351,34 +1351,108 @@
 
         let currentStudents = [];
         function loadSiswa(kelas) {
-            const absenContainer = document.getElementById('otomatis-absen-container'); const statusText = document.getElementById('status-absen-otomatis');
-            const hiddenInput = document.getElementById('hidden-absen-otomatis'); const manualWrapper = document.getElementById('manual-absen-wrapper');
-            if (!kelas) { absenContainer.classList.add('hidden'); hiddenInput.value = ''; manualWrapper.innerHTML = ''; currentStudents = []; return; }
-            
-            absenContainer.classList.remove('hidden'); statusText.innerHTML = '<i class="fas fa-spinner fa-spin text-lg mr-2 text-indigo-500"></i> Mengecek data absen pusat...';
-            hiddenInput.value = ''; manualWrapper.innerHTML = '<div class="p-6 text-center"><i class="fas fa-spinner fa-spin text-xl text-indigo-400 mb-2"></i><p class="text-xs text-gray-500">Memuat daftar siswa...</p></div>'; currentStudents = [];
-            
-            callAPI('getAbsenSiswaHariIni', kelas, true, 300000).then(res => {
-                if (res && res.success) {
-                    if (res.data && res.data.length > 0) { statusText.innerHTML = `<i class="fas fa-user-times text-lg mr-2 text-red-500"></i> <span class="text-red-600">${res.data}</span>`; hiddenInput.value = res.data; } 
-                    else { statusText.innerHTML = `<i class="fas fa-check-circle text-lg mr-2 text-green-500"></i> <span class="text-green-600">Nihil (Semua hadir saat apel)</span>`; }
-                } else statusText.innerHTML = `<i class="fas fa-exclamation-triangle text-lg mr-2 text-yellow-500"></i> <span class="text-yellow-600">Gagal mengecek. Anggap Nihil.</span>`;
-            }).catch(() => statusText.innerHTML = `<i class="fas fa-wifi text-lg mr-2 text-red-500"></i> <span class="text-red-500">Koneksi terputus.</span>`);
-            
-            callAPI('getSiswaByKelas', kelas, true, 86400000).then(res => {
-                if (res && res.success) { currentStudents = res.data || []; renderStudentList(); } 
-                else { manualWrapper.innerHTML = '<div class="p-6 text-center text-xs text-red-500">Gagal memuat daftar siswa.</div>'; }
-            }).catch(() => { manualWrapper.innerHTML = '<div class="p-6 text-center text-xs text-red-500">Koneksi terputus saat memuat daftar siswa.</div>'; });
+            const absenContainer = document.getElementById('otomatis-absen-container');
+            const statusText = document.getElementById('status-absen-otomatis');
+            const hiddenInput = document.getElementById('hidden-absen-otomatis');
+            const manualWrapper = document.getElementById('manual-absen-wrapper');
+
+            if (!kelas) {
+                absenContainer.classList.add('hidden');
+                hiddenInput.value = '';
+                manualWrapper.innerHTML = '';
+                currentStudents = [];
+                return;
+            }
+
+            absenContainer.classList.remove('hidden');
+            statusText.innerHTML = '<i class="fas fa-spinner fa-spin text-lg mr-2 text-indigo-500"></i> Menghubungkan ke absensi pusat...';
+            hiddenInput.value = '';
+            manualWrapper.innerHTML = '<div class="p-6 text-center"><i class="fas fa-spinner fa-spin text-xl text-indigo-400 mb-2"></i><p class="text-xs text-gray-500">Memuat status siswa terbaru...</p></div>';
+            currentStudents = [];
+
+            // Tidak memakai cache agar status yang baru masuk di absensi pusat langsung terbaca.
+            callAPI('getAbsenSiswaHariIni', kelas, false).then(res => {
+                if (!res || !res.success || !Array.isArray(res.data)) {
+                    throw new Error((res && res.message) || 'Respons absensi pusat tidak valid.');
+                }
+
+                currentStudents = res.data;
+                hiddenInput.value = res.absenText || '';
+                renderStudentList();
+
+                const s = res.summary || {};
+                statusText.innerHTML = `
+                    <div class="w-full">
+                        <div class="flex items-center mb-1">
+                            <i class="fas fa-cloud-download-alt text-lg mr-2 text-green-600"></i>
+                            <span class="text-green-700">Terhubung ke absensi pusat</span>
+                        </div>
+                        <div class="text-[11px] font-medium text-gray-600 leading-relaxed">
+                            Total ${Number(s.total || currentStudents.length)} siswa: 
+                            <span class="text-green-600">${Number(s.hadir || 0)} hadir</span>, 
+                            <span class="text-yellow-600">${Number(s.sakit || 0)} sakit</span>, 
+                            <span class="text-blue-600">${Number(s.izin || 0)} izin</span>, 
+                            <span class="text-red-600">${Number(s.alpa || 0)} alpa</span>${Number(s.bolos || 0) ? `, <span class="text-red-700">${Number(s.bolos)} bolos</span>` : ''}.
+                        </div>
+                        <div class="text-[10px] text-gray-400 mt-1">Status dapat dikoreksi guru sebelum jurnal disimpan.</div>
+                    </div>`;
+            }).catch(err => {
+                statusText.innerHTML = `<i class="fas fa-exclamation-triangle text-lg mr-2 text-yellow-500"></i> <span class="text-yellow-600">Absensi pusat gagal dimuat. Menggunakan daftar siswa cadangan.</span>`;
+
+                callAPI('getSiswaByKelas', kelas, false).then(res => {
+                    if (res && res.success && Array.isArray(res.data)) {
+                        currentStudents = res.data.map(item => {
+                            if (item && typeof item === 'object') return Object.assign({ status: 'Hadir', statusPusat: 'Tidak tersedia', tercatatPusat: false }, item);
+                            return { nisn: '', nama: String(item || ''), kelas: kelas, status: 'Hadir', statusPusat: 'Tidak tersedia', tercatatPusat: false };
+                        });
+                        renderStudentList();
+                    } else {
+                        manualWrapper.innerHTML = '<div class="p-6 text-center text-xs text-red-500">Gagal memuat daftar siswa.</div>';
+                    }
+                }).catch(() => {
+                    manualWrapper.innerHTML = '<div class="p-6 text-center text-xs text-red-500">Koneksi terputus saat memuat daftar siswa.</div>';
+                });
+
+                console.error('Absensi pusat:', err);
+            });
         }
 
         function renderStudentList() {
             const wrapper = document.getElementById('manual-absen-wrapper');
-            if (currentStudents.length === 0) { wrapper.innerHTML = '<div class="p-6 text-center text-xs text-gray-500">Tidak ada data siswa untuk kelas ini.</div>'; return; }
+            if (!Array.isArray(currentStudents) || currentStudents.length === 0) {
+                wrapper.innerHTML = '<div class="p-6 text-center text-xs text-gray-500">Tidak ada data siswa untuk kelas ini.</div>';
+                return;
+            }
+
+            const allowedStatuses = ['Hadir', 'Sakit', 'Izin', 'Alpa', 'Bolos'];
             let html = '';
-            currentStudents.forEach((siswa, index) => {
-                html += `<div class="flex items-center justify-between p-3.5 hover:bg-gray-50 transition student-attendance-row bg-white"><div class="flex items-center text-sm font-semibold text-gray-700 truncate pr-3 flex-1"><span class="text-gray-400 w-6 text-right mr-3 flex-shrink-0 text-xs font-mono">${index + 1}.</span><span class="truncate student-name-label">${siswa}</span></div><div class="flex-shrink-0"><select class="student-status-select text-xs font-semibold px-3 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white cursor-pointer outline-none transition-colors" onchange="updateSelectColor(this)"><option value="Hadir" selected>Hadir</option><option value="Sakit">Sakit</option><option value="Izin">Izin</option><option value="Alpa">Alpa</option><option value="Bolos">Bolos</option></select></div></div>`;
+
+            currentStudents.forEach((raw, index) => {
+                const item = (raw && typeof raw === 'object') ? raw : { nama: String(raw || ''), nisn: '', status: 'Hadir', statusPusat: 'Hadir', tercatatPusat: false };
+                const nama = String(item.nama || '').trim();
+                const nisn = String(item.nisn || '').trim();
+                const initialStatus = allowedStatuses.includes(item.status) ? item.status : 'Hadir';
+                const sourceLabel = item.tercatatPusat ? 'Tercatat pusat' : 'Belum tercatat pusat';
+                const sourceClass = item.tercatatPusat ? 'text-green-600' : 'text-red-500';
+
+                const options = allowedStatuses.map(status => `<option value="${status}" ${status === initialStatus ? 'selected' : ''}>${status}</option>`).join('');
+
+                html += `<div class="flex items-center justify-between p-3.5 hover:bg-gray-50 transition student-attendance-row bg-white" data-nisn="${safeHTML(nisn)}" data-initial-status="${safeHTML(initialStatus)}">
+                    <div class="flex items-center text-sm font-semibold text-gray-700 truncate pr-3 flex-1 min-w-0">
+                        <span class="text-gray-400 w-6 text-right mr-3 flex-shrink-0 text-xs font-mono">${index + 1}.</span>
+                        <div class="min-w-0">
+                            <span class="block truncate student-name-label">${safeHTML(nama)}</span>
+                            <span class="block text-[9px] font-normal ${sourceClass}">${safeHTML(sourceLabel)}${nisn ? ' • NISN ' + safeHTML(nisn) : ''}</span>
+                        </div>
+                    </div>
+                    <div class="flex-shrink-0">
+                        <select class="student-status-select text-xs font-semibold px-3 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white cursor-pointer outline-none transition-colors" onchange="updateSelectColor(this)">${options}</select>
+                    </div>
+                </div>`;
             });
+
             wrapper.innerHTML = html;
+            wrapper.querySelectorAll('.student-status-select').forEach(updateSelectColor);
         }
 
         function updateSelectColor(selectEl) {
@@ -1419,23 +1493,20 @@
                     guruPengisi = currentUser + " (Ganti " + tuGuruVal + ")";
                 }
 
-                const absenOtomatis = document.getElementById('hidden-absen-otomatis').value.trim();
                 const manualItems = [];
-                const absensiSiswa = []; // Harus dibuat sebelum dipakai di dalam forEach.
+                const absensiSiswa = [];
 
                 document.querySelectorAll('.student-attendance-row').forEach(row => {
                     const namaEl = row.querySelector('.student-name-label');
                     const statusEl = row.querySelector('.student-status-select');
                     const siswa = namaEl ? namaEl.innerText.trim() : '';
                     const ket = statusEl ? statusEl.value : 'Hadir';
+                    const nisn = String(row.dataset.nisn || '').trim();
+                    const statusPusat = String(row.dataset.initialStatus || '').trim();
 
-                    if (siswa) absensiSiswa.push({ nama: siswa, status: ket });
+                    if (siswa) absensiSiswa.push({ nisn: nisn, nama: siswa, status: ket, statusPusat: statusPusat });
                     if (siswa && ket !== 'Hadir') manualItems.push(`${siswa} (${ket})`);
                 });
-
-                const finalAbsenArr = [];
-                if (absenOtomatis) finalAbsenArr.push(absenOtomatis);
-                if (manualItems.length) finalAbsenArr.push(manualItems.join(', '));
 
                 const data = {
                     hari: document.getElementById('input-hari').value,
@@ -1445,7 +1516,7 @@
                     kelas: kelas,
                     mapel: mapel,
                     materi: materi,
-                    siswaAbsenStr: finalAbsenArr.join(', '),
+                    siswaAbsenStr: manualItems.length ? manualItems.join(', ') : 'Nihil',
                     absensiSiswa: absensiSiswa,
                     tindakLanjut: tindakLanjut,
                     foto: document.getElementById('hidden-foto-base64').value,
